@@ -143,6 +143,10 @@ bot.on('message', function (user, userID, channelID, message, evt) {
                 assign(channelID, evt, args);
                 break;
                 
+            case 'delete':
+                deleteTask(channelID, evt, args);
+                break;
+                
             case 'list':
                 list(channelID, evt, args);
             // Just add any case commands if you want to..
@@ -406,8 +410,8 @@ function assign(channelID, evt, args) {
                     return;
                 }
                 var task = stmt.getAsObject();
-                logger.info(task);
                 stmt.free();
+                
                 var update = "UPDATE tasks SET assignee_id = ? WHERE task_id = ?;";
                 db.run(update, [assignee.id, task.task_id]);
                 saveDB(evt.d.guild_id, db);
@@ -447,6 +451,68 @@ function addTask(channelID, guild_id, manager_id, assignee_id, description, prio
     var insert = "INSERT INTO tasks (manager_id, assignee_id, description, priority) values (?, ?, ?, ?);";
     db.run(insert, [manager_id, assignee_id, description, priorityInt]);
     saveDB(guild_id, db);
+}
+
+function deleteTask(channelID, evt, args) {
+    
+    var db = getDB(channelID, evt.d.guild_id);
+    if (db == null) return;
+    
+    if (args.length >= 4 && args[2] == "task" && !isNaN(args[3])) {
+        var manager = evt.d.author;
+
+        var stmt = db.prepare("SELECT * FROM tasks WHERE task_id = $t");
+        stmt.bind({$t:parseInt(args[3])});
+        if (!stmt.step()) {
+            bot.sendMessage({
+                to: channelID,
+                message: "That task does not exist"
+            });
+            stmt.free();
+            return;
+        }
+        else if (stmt.getAsObject().manager_id != manager.id) {
+            bot.sendMessage({
+                to: channelID,
+                message: "You can only delete tasks that you've created"
+            });
+            stmt.free();
+            return;
+        }
+        else if (stmt.getAsObject().status == 2) {
+            bot.sendMessage({
+                to: channelID,
+                message: "You can't delete a completed task!"
+            });
+            stmt.free();
+            return;
+        }
+        else if (stmt.getAsObject().status == 1) {
+            bot.sendMessage({
+                to: channelID,
+                message: "You can't delete an in-progress task!"
+            });
+            stmt.free();
+            return;
+        }
+        var task = stmt.getAsObject();
+        stmt.free();
+        
+        var update = "UPDATE tasks SET assignee_id = 'nobody' WHERE task_id = ?;";
+        db.run(update, [task.task_id]);
+        saveDB(evt.d.guild_id, db);
+        
+        bot.sendMessage({
+            to: channelID,
+            message: "Done! Task#" + task.task_id + " has been deleted"
+        });            
+    }    
+    else {
+        bot.sendMessage({
+            to: channelID,
+            message: 'delete...what?'
+        });
+    }
 }
 
 function list(channelID, evt, args) {
@@ -519,13 +585,16 @@ function list(channelID, evt, args) {
             stmt.free();
             
             if (notStarted > 0) {
-                taskList = taskList.concat(notStarted + " tasks not started\n");
+                taskList = taskList.concat(notStarted + " task(s) not started\n");
             }
             if (inProgress > 0) {
-                taskList = taskList.concat(inProgress + " tasks in progress\n");
+                taskList = taskList.concat(inProgress + " task(s) in progress\n");
             }
             if (completed > 0) {
-                taskList = taskList.concat(completed + " tasks completed\n");
+                taskList = taskList.concat(completed + " task(s) completed\n");
+            }
+            if (notStarted + inProgress + completed == 0) {
+                taskList = taskList.concat("...cricket...\n");
             }
             
             bot.sendMessage({
