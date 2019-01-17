@@ -9,6 +9,12 @@ logger.add(new logger.transports.Console, {
     colorize: true
 });
 logger.level = 'debug';
+
+// Help the bot remember its conversation
+var currentUser = null;
+var currentTopic = "";
+var currentMemory = "";
+
 // Initialize Discord Bot
 var bot = new Discord.Client({
    token: auth.token,
@@ -20,6 +26,7 @@ bot.on('ready', function (evt) {
     logger.info(bot.username + ' - (' + bot.id + ')');
     //logger.info(bot.servers)
 });
+
 bot.on('message', function (user, userID, channelID, message, evt) {
 
     if (evt.d.author.id != bot.id && evt.d.guild_id == null) {
@@ -32,10 +39,82 @@ bot.on('message', function (user, userID, channelID, message, evt) {
     // logger.info(evt.d.)
     // logger.info(bot.permissions)
     // logger.info(evt.d.guild_id)
-    //logger.info(bot.servers[evt.d.guild_id].members[evt.d.author.id].roles)
+    logger.info(bot.servers[evt.d.guild_id].members)
     //logger.info(bot.servers[evt.d.guild_id].roles)
-    isAdmin(evt.d.author.id, evt.d.guild_id)
-    if (message.startsWith(mention(bot.id) + ' ')) {
+
+    if (currentUser != null && evt.d.author.id == currentUser.id) {
+        
+        if (message.startsWith("nvm") || message.startsWith("jk")) {
+            
+            endConversation();
+            
+            bot.sendMessage({
+                to: channelID,
+                message: "Okay no problem! I'll just cross that out then"
+            });
+            return;
+        }
+         
+        switch(currentTopic) {
+            case 'describe task':
+                // store description in json
+                currentMemory = currentMemory.concat('"description":"' + message + '"}')
+                logger.info(currentMemory);
+                currentTopic = "prioritize task";
+                
+                bot.sendMessage({
+                    to: channelID,
+                    message: "Okay! How important is this task?"
+                });
+                break;
+                
+            case 'prioritize task':
+                var priority = message.split(' ')[0];
+                var priorityInt = -1;
+                switch(priority) {
+                    case 'high':
+                        priorityInt++;
+                    case 'medium':
+                        priorityInt++;
+                    case 'low':
+                        priorityInt++;
+                    default:
+                        if (priorityInt < 0) {
+                            bot.sendMessage({
+                                to: channelID,
+                                message: "Right...so is that low, medium, or high?"
+                            });
+                        }
+                        else {
+                            var memory = JSON.parse(currentMemory);
+                            addTask(channelID, evt.d.guild_id, currentUser.id, memory.assignee_id, memory.description, priorityInt);
+                            endConversation();
+                            bot.sendMessage({
+                                to: channelID,
+                                message: "Done! This task has been assigned to " + mention(memory.assignee_id)
+                            });
+                        }
+                }
+                break;
+            
+            default:
+                bot.sendMessage({
+                    to: channelID,
+                    message: "What were we talking about again?"
+                });
+                endConversation();
+        }
+    }
+    else if (message.startsWith(mention(bot.id) + ' ')) {
+        
+        if (currentUser != null) {
+            bot.sendMessage({
+                to: channelID,
+                message: "I'm currently talking to " + mention(currentUser.id) + ". If it is really that urgent, then tell them to hurry!"
+            });
+            return;
+        }
+
         var args = message.split(' ');
         var cmd = args[1];
        
@@ -44,21 +123,34 @@ bot.on('message', function (user, userID, channelID, message, evt) {
             case 'prepare':
                 prepare(channelID, evt.d.guild_id);
                 break;
+                
             case 'hi':
                 bot.sendMessage({
                     to: channelID,
                     message: 'hiii! :D'
                 });
                 break;
+                
             case 'let':
                 let(channelID, evt, args);
                 break;
+                
             case 'revoke':
                 revoke(channelID, evt, args);
                 break;
+                
+            case 'assign':
+                assign(channelID, evt, args);
             // Just add any case commands if you want to..
-         }
-     }
+        }
+    }
+    else if (currentUser != null && message.startsWith(mention(currentUser.id) + ' hurry')) {
+        bot.sendMessage({
+            to: channelID,
+            message: mention(currentUser.id) + "If you don't hurry up, I'll have to drop our conversation. There are people waiting in line!"
+        });
+        // start a timer /////////////////////////
+    }
 });
 
 function mention(user_id) {
@@ -242,6 +334,115 @@ function revoke(channelID, evt, args) {
 
 function assign(channelID, evt, args) {
     
+    var db = getDB(channelID, evt.d.guild_id);
+    if (db == null) return;
+    
+    else if (args.length >= 5 && args[3] === "to" && (args[2] == "task" || !isNaN(args[2]))) {
+        var manager = evt.d.author;
+        var assignee = bot.users[idFromMention(evt, args[4])]
+        if (assignee == null) {
+            bot.sendMessage({
+                to: channelID,
+                message: 'User ' + args[4] + ' does not appear to be here...'
+            });
+        }
+        else if (assignee.bot) {
+            bot.sendMessage({
+                to: channelID,
+                message: "You can't assign tasks to a bot!"
+            });
+        }
+        else {
+            if (manager.id != assignee.id) {
+                var stmt = db.prepare("SELECT * FROM management WHERE manager_id=$m AND assignee_id=$a");
+                stmt.bind({$m:manager.id, $a:assignee.id});
+                if (!stmt.step()) {
+                    bot.sendMessage({
+                        to: channelID,
+                        message: "You can only assign tasks to people you manage"
+                    });
+                    stmt.free();
+                    return;
+                }
+                stmt.free();
+            }
+            if (!isNaN(args[2])) {
+                var stmt = db.prepare("SELECT * FROM tasks WHERE task_id = $t");
+                stmt.bind({$t:parseInt(args[2])});
+                if (!stmt.step()) {
+                    bot.sendMessage({
+                        to: channelID,
+                        message: "That task does not exist"
+                    });
+                    stmt.free();
+                    return;
+                }
+                else if (stmt.getAsObject().manager_id != manager.id) {
+                    bot.sendMessage({
+                        to: channelID,
+                        message: "You can only reassign tasks that you've created"
+                    });
+                    stmt.free();
+                    return;
+                }
+                else if (stmt.getAsObject().assignee_id == assignee.id) {
+                    bot.sendMessage({
+                        to: channelID,
+                        message: "That person is already assigned to this task!"
+                    });
+                    stmt.free();
+                    return;
+                }
+                else if (stmt.getAsObject().status == 2) {
+                    bot.sendMessage({
+                        to: channelID,
+                        message: "You can't reassign completed tasks!"
+                    });
+                    stmt.free();
+                    return;
+                }
+                var task = stmt.getAsObject();
+                logger.info(task);
+                stmt.free();
+                var update = "UPDATE tasks SET assignee_id = ? WHERE task_id = ?;";
+                db.run(update, [assignee.id, task.task_id]);
+                saveDB(evt.d.guild_id, db);
+                
+                bot.sendMessage({
+                    to: channelID,
+                    message: "Done! Task#" + task.task_id + " has been reassigned from " + mention(task.assignee_id) + " to " + mention(assignee.id)
+                });
+                
+            }
+            else {
+                currentUser = manager;
+                currentTopic = "describe task";
+                currentMemory = '{"assignee_id":"' + assignee.id + '", ';
+                logger.info(currentUser);
+                logger.info(currentTopic);
+                logger.info(currentMemory);
+                bot.sendMessage({
+                    to: channelID,
+                    message: "Sure! What should the task be?"
+                });
+            }
+        }    
+    }
+    else {
+        bot.sendMessage({
+            to: channelID,
+            message: 'assign...what?'
+        });
+    }
+}
+
+function addTask(channelID, guild_id, manager_id, assignee_id, description, priorityInt) {
+    
+    db = getDB(channelID, guild_id)
+    
+    var insert = "INSERT INTO tasks (manager_id, assignee_id, description, priority) values (?, ?, ?, ?);";
+    db.run(insert, [manager_id, assignee_id, description, priorityInt]);
+    saveDB(guild_id, db);
 }
 
 function getDB(channelID, guild_id) {
@@ -268,14 +469,10 @@ function prepare(channelID, guild_id) {
     var db = new sql.Database();
     
     // tables
-    var tables = "CREATE TABLE management (manager_id int, assignee_id int);";
-    tables += "CREATE TABLE tasks (task_id INTEGER PRIMARY KEY, manager_id int, assignee_id int, priority tinyint(1), description text, status tinyint(1) DEFAULT 0);";
+    var tables = "CREATE TABLE management (manager_id varchar(50), assignee_id varchar(50));";
+    tables += "CREATE TABLE tasks (task_id INTEGER PRIMARY KEY, manager_id varchar(50), assignee_id varchar(50), priority tinyint(1), description text, status tinyint(1) DEFAULT 0);";
     db.run(tables)
     
-    var inserts = "INSERT INTO tasks (manager_id, assignee_id, priority, description) values (1, 2, 3, 'this is the first task ever');";
-    inserts += "INSERT INTO tasks (manager_id, assignee_id, priority, description) values (5, 4, 2, 'second task');"
-    inserts += "INSERT INTO tasks (manager_id, assignee_id, priority, description) values (1, 4, 1, 'THREE');"
-    db.run(inserts);
     
     // stmt = db.prepare("SELECT * FROM tasks");
     // while (stmt.step()) logger.info(stmt.get());
@@ -291,3 +488,8 @@ function prepare(channelID, guild_id) {
     });
 }
 
+function endConversation() {
+    currentUser = null;
+    currentTopic = "";
+    currentMemory = "";
+}
