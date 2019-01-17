@@ -1,5 +1,6 @@
 const Discord = require('discord.io');
-// const SQLite = require("better-sqlite3");
+const sql = require('sql.js');
+const fs = require("fs");
 const logger = require('winston');
 const auth = require('./auth.json');
 // Configure logger settings
@@ -17,7 +18,7 @@ bot.on('ready', function (evt) {
     logger.info('Connected');
     logger.info('Logged in as: ');
     logger.info(bot.username + ' - (' + bot.id + ')');
-    logger.info(bot.servers)
+    //logger.info(bot.servers)
 });
 bot.on('message', function (user, userID, channelID, message, evt) {
 
@@ -31,7 +32,7 @@ bot.on('message', function (user, userID, channelID, message, evt) {
     // logger.info(evt.d.)
     // logger.info(bot.permissions)
     // logger.info(evt.d.guild_id)
-    logger.info(bot.servers[evt.d.guild_id].members[evt.d.author.id].roles)
+    //logger.info(bot.servers[evt.d.guild_id].members[evt.d.author.id].roles)
     //logger.info(bot.servers[evt.d.guild_id].roles)
     isAdmin(evt.d.author.id, evt.d.guild_id)
     if (message.startsWith(mention(bot.id) + ' ')) {
@@ -40,6 +41,9 @@ bot.on('message', function (user, userID, channelID, message, evt) {
        
         // args = args.splice(1);
         switch(cmd) {
+            case 'prepare':
+                prepare(channelID, evt.d.guild_id);
+                break;
             case 'hi':
                 bot.sendMessage({
                     to: channelID,
@@ -47,10 +51,10 @@ bot.on('message', function (user, userID, channelID, message, evt) {
                 });
                 break;
             case 'let':
-                let(channelID, evt, args)
+                let(channelID, evt, args);
                 break;
             case 'revoke':
-                revoke(channelID, evt, args)
+                revoke(channelID, evt, args);
                 break;
             // Just add any case commands if you want to..
          }
@@ -73,12 +77,12 @@ function isAdmin(user_id, guild_id) {
     var roles = bot.servers[guild_id].roles;
     var user_roles = bot.servers[guild_id].members[user_id].roles;
     
-    logger.info(user_roles)
+    //logger.info(user_roles)
     for (i in user_roles) {
         var role = user_roles[i];
         
-        logger.info(parseInt(roles[user_roles[i]]._permissions))
-        logger.info((parseInt(roles[user_roles[i]]._permissions) & admin) === admin)
+        //logger.info(parseInt(roles[user_roles[i]]._permissions))
+        //logger.info((parseInt(roles[user_roles[i]]._permissions) & admin) === admin)
         if ((roles[role]._permissions & admin) === admin) {
             return true
         }
@@ -87,6 +91,10 @@ function isAdmin(user_id, guild_id) {
 }
 
 function let(channelID, evt, args) {
+    
+    var db = getDB(channelID, evt.d.guild_id);
+    if (db == null) return;
+    
     if (!isAdmin(evt.d.author.id, evt.d.guild_id)) {
         bot.sendMessage({
             to: channelID,
@@ -127,10 +135,22 @@ function let(channelID, evt, args) {
             });
         }
         else {
-            
-            // code goes here to insert appropriate manage entry into the sql db
-            // also check if entry already exists
-            
+            var stmt = db.prepare("SELECT * FROM management WHERE manager_id=$m AND assignee_id=$a");
+            stmt.bind({$m:manager.id, $a:assignee.id});
+            if (stmt.step()) {
+                bot.sendMessage({
+                    to: channelID,
+                    message: mention(manager.id) + " already manages " + mention(assignee.id)
+                });
+                stmt.free();
+                return;
+            }
+            stmt.free();
+
+            var insert = "INSERT INTO management (manager_id, assignee_id) values (?, ?);";
+            db.run(insert, [manager.id, assignee.id]);
+            saveDB(evt.d.guild_id, db);
+
             bot.sendMessage({
                 to: channelID,
                 message: "Done! " + mention(manager.id) + " can now manage " + mention(assignee.id)
@@ -146,6 +166,10 @@ function let(channelID, evt, args) {
 }
 
 function revoke(channelID, evt, args) {
+    
+    var db = getDB(channelID, evt.d.guild_id);
+    if (db == null) return;
+    
     if (!isAdmin(evt.d.author.id, evt.d.guild_id)) {
         bot.sendMessage({
             to: channelID,
@@ -186,9 +210,21 @@ function revoke(channelID, evt, args) {
             });
         }
         else {
+            var stmt = db.prepare("SELECT * FROM management WHERE manager_id=$m AND assignee_id=$a");
+            stmt.bind({$m:manager.id, $a:assignee.id});
+            if (!stmt.step()) {
+                bot.sendMessage({
+                    to: channelID,
+                    message: mention(manager.id) + " doesn't even manage " + mention(assignee.id)
+                });
+                stmt.free();
+                return;
+            }
+            stmt.free();
             
-            // code goes here to delete appropriate manage entry from the sql db
-            // also check if entry exists
+            var deletion = "DELETE FROM management WHERE manager_id = ? AND assignee_id = ?;";
+            db.run(deletion, [manager.id, assignee.id]);
+            saveDB(evt.d.guild_id, db);
             
             bot.sendMessage({
                 to: channelID,
@@ -206,5 +242,52 @@ function revoke(channelID, evt, args) {
 
 function assign(channelID, evt, args) {
     
+}
+
+function getDB(channelID, guild_id) {
+    if (!fs.existsSync('sql/' + guild_id + '.sql')) {
+        bot.sendMessage({
+            to: channelID,
+            message: 'I have not prepared the server yet! Please tell me to do that'
+        });
+        return null;
+    }
+    return new SQL.Database(fs.readFileSync('sql/' + guild_id + '.sql'));
+}
+
+function saveDB(guild_id, db) {
+    var buffer = Buffer.from(db.export());
+    fs.writeFileSync("sql/" + guild_id + ".sql", buffer);
+}
+
+function prepare(channelID, guild_id) {
+    
+    // check if db already exists for guild_id
+    
+    // database
+    var db = new sql.Database();
+    
+    // tables
+    var tables = "CREATE TABLE management (manager_id int, assignee_id int);";
+    tables += "CREATE TABLE tasks (task_id INTEGER PRIMARY KEY, manager_id int, assignee_id int, priority tinyint(1), description text, status tinyint(1) DEFAULT 0);";
+    db.run(tables)
+    
+    var inserts = "INSERT INTO tasks (manager_id, assignee_id, priority, description) values (1, 2, 3, 'this is the first task ever');";
+    inserts += "INSERT INTO tasks (manager_id, assignee_id, priority, description) values (5, 4, 2, 'second task');"
+    inserts += "INSERT INTO tasks (manager_id, assignee_id, priority, description) values (1, 4, 1, 'THREE');"
+    db.run(inserts);
+    
+    // stmt = db.prepare("SELECT * FROM tasks");
+    // while (stmt.step()) logger.info(stmt.get());
+    
+    // stmt.free();
+    
+    // export
+    saveDB(guild_id, db);
+    
+    bot.sendMessage({
+        to: channelID,
+        message: "Server has been prepared! I'm ready to organize tasks!"
+    });
 }
 
