@@ -149,6 +149,19 @@ bot.on('message', function (user, userID, channelID, message, evt) {
                 
             case 'list':
                 list(channelID, evt, args);
+                break;
+                
+            case 'start':
+                updateStatus(channelID, evt, args, 1);
+                break;
+            
+            case 'stop':
+                updateStatus(channelID, evt, args, 0);
+                break;
+                
+            case 'complete':
+                updateStatus(channelID, evt, args, 2);
+                break;
             // Just add any case commands if you want to..
         }
     }
@@ -607,6 +620,96 @@ function list(channelID, evt, args) {
         bot.sendMessage({
             to: channelID,
             message: 'list...what?'
+        });
+    }
+}
+
+function updateStatus(channelID, evt, args, newStatus) {
+    var db = getDB(channelID, evt.d.guild_id);
+    if (db == null) return;
+    
+    if (args.length >= 4 && args[2] == "task" && !isNaN(args[3])) {
+        var assignee = evt.d.author;
+        var status = "";
+        switch(newStatus) {
+            case 0:
+                status = 'stop';
+                break;
+            case 1:
+                status = 'start';
+                break;
+            case 2:
+                status = 'complete';
+        }
+        
+        var stmt = db.prepare("SELECT * FROM tasks WHERE task_id = $t");
+        stmt.bind({$t:parseInt(args[3])});
+        if (!stmt.step()) {
+            bot.sendMessage({
+                to: channelID,
+                message: "That task does not exist"
+            });
+            stmt.free();
+            return;
+        }
+        else if (stmt.getAsObject().assignee_id != assignee.id) {
+            bot.sendMessage({
+                to: channelID,
+                message: "You can only " + status + " tasks that are assigned to you"
+            });
+            stmt.free();
+            return;
+        }
+        else if (stmt.getAsObject().status == newStatus) {
+            
+            var message = "";
+            switch(newStatus) {
+                case 0:
+                    message = "This task hasn't been started yet";
+                    break;
+                case 1:
+                    message = "This task is already in progress";
+                    break;
+                case 2:
+                    message = "This task was already completed";
+                    break;
+            }
+            
+            bot.sendMessage({
+                to: channelID,
+                message: message
+            });
+            stmt.free();
+            return;
+        }
+        var task = stmt.getAsObject();
+        stmt.free();
+        
+        var update = "UPDATE tasks SET status = ? WHERE task_id = ?;";
+        db.run(update, [newStatus, task.task_id]);
+        saveDB(evt.d.guild_id, db);
+        
+        var message = "";
+        switch(newStatus) {
+            case 0:
+                message = "Aww...the task has been stopped";
+                break;
+            case 1:
+                message = "You can do it! The task has been started";
+                break;
+            case 2:
+                message = "Woo! The task has been completed";
+                break;
+        }
+        bot.sendMessage({
+            to: channelID,
+            message: message
+        });            
+    }    
+    else {
+        bot.sendMessage({
+            to: channelID,
+            message: status + '...what?'
         });
     }
 }
