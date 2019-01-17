@@ -141,6 +141,10 @@ bot.on('message', function (user, userID, channelID, message, evt) {
                 
             case 'assign':
                 assign(channelID, evt, args);
+                break;
+                
+            case 'list':
+                list(channelID, evt, args);
             // Just add any case commands if you want to..
         }
     }
@@ -158,7 +162,7 @@ function mention(user_id) {
 }
 
 function idFromMention(evt, mention) {
-    if (mention == "me") {
+    if (mention == "me" || mention == "my") {
         return evt.d.author.id
     }
     return mention.substring(2, mention.length - 1)
@@ -443,6 +447,99 @@ function addTask(channelID, guild_id, manager_id, assignee_id, description, prio
     var insert = "INSERT INTO tasks (manager_id, assignee_id, description, priority) values (?, ?, ?, ?);";
     db.run(insert, [manager_id, assignee_id, description, priorityInt]);
     saveDB(guild_id, db);
+}
+
+function list(channelID, evt, args) {
+    var db = getDB(channelID, evt.d.guild_id);
+    if (db == null) return;
+    if (args.length >= 4 && args[3] === "tasks") {
+        args.splice(3, 0, "current");
+    }
+    if (args.length >= 5 && args[4] === "tasks") {
+        var assignee = bot.users[idFromMention(evt, args[2])]
+        if (assignee == null) {
+            bot.sendMessage({
+                to: channelID,
+                message: 'User ' + args[2] + ' does not appear to be here...'
+            });
+        }
+        else if (assignee.bot) {
+            bot.sendMessage({
+                to: channelID,
+                message: "Bots don't have tasks!"
+            });
+        }
+        else {
+            var query = "";
+            switch(args[3]) {
+                case "completed":
+                    query = "SELECT * FROM tasks WHERE assignee_id=$a AND status = 2 ORDER BY status, priority";
+                    break;
+                case "current":
+                    query = "SELECT * FROM tasks WHERE assignee_id=$a AND status < 2 ORDER BY status, priority";
+                    break;
+                case "started":
+                    query = "SELECT * FROM tasks WHERE assignee_id=$a AND status = 1 ORDER BY status, priority";
+                    break;
+                case "todo":
+                    query = "SELECT * FROM tasks WHERE assignee_id=$a AND status = 0 ORDER BY status, priority";
+                    break;
+                default:
+                    query = "SELECT * FROM tasks WHERE assignee_id=$a ORDER BY status, priority";
+            }
+            var stmt = db.prepare(query);
+            stmt.bind({$a:assignee.id});
+            var taskList = "Okay! Here are the tasks assigned to " + mention(assignee.id) + ":\n\n";
+            var notStarted = 0;
+            var inProgress = 0;
+            var completed = 0;
+            while (stmt.step()) {
+                var task = stmt.getAsObject();
+                var priorityArr = ["Low", "Medium", "High"];
+                var statusArr = ["Not Started", "In Progress", "Completed"];
+                taskList = taskList.concat(
+                    "Task#" + task.task_id + "\n" + 
+                    "Assigned by " + mention(task.manager_id) + "\n" + 
+                    task.description + "\n" + 
+                    "Priority: " + priorityArr[task.priority] + "\n" + 
+                    "Status: " + statusArr[task.status] + "\n\n"
+                );
+                switch(task.status) {
+                    case 0:
+                        notStarted++;
+                        break;
+                    case 1:
+                        inProgress++;
+                        break;
+                    case 2:
+                        completed++;
+                        break;
+                }
+            }
+            stmt.free();
+            
+            if (notStarted > 0) {
+                taskList = taskList.concat(notStarted + " tasks not started\n");
+            }
+            if (inProgress > 0) {
+                taskList = taskList.concat(inProgress + " tasks in progress\n");
+            }
+            if (completed > 0) {
+                taskList = taskList.concat(completed + " tasks completed\n");
+            }
+            
+            bot.sendMessage({
+                to: channelID,
+                message: taskList
+            });
+        }
+    }
+    else {
+        bot.sendMessage({
+            to: channelID,
+            message: 'list...what?'
+        });
+    }
 }
 
 function getDB(channelID, guild_id) {
