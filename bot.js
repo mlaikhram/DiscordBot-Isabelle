@@ -39,8 +39,8 @@ bot.on('message', function (user, userID, channelID, message, evt) {
     // logger.info(evt.d.)
     // logger.info(bot.permissions)
     // logger.info(evt.d.guild_id)
-    logger.info(bot.servers[evt.d.guild_id].members)
-    //logger.info(bot.servers[evt.d.guild_id].roles)
+    // logger.info(bot.servers[evt.d.guild_id].members)
+    // logger.info(bot.servers[evt.d.guild_id].roles)
 
     if (currentUser != null && evt.d.author.id == currentUser.id) {
         
@@ -59,7 +59,7 @@ bot.on('message', function (user, userID, channelID, message, evt) {
             case 'describe task':
                 // store description in json
                 currentMemory = currentMemory.concat('"description":"' + message + '"}')
-                logger.info(currentMemory);
+                // logger.info(currentMemory);
                 currentTopic = "prioritize task";
                 
                 bot.sendMessage({
@@ -439,9 +439,9 @@ function assign(channelID, evt, args) {
                 currentUser = manager;
                 currentTopic = "describe task";
                 currentMemory = '{"assignee_id":"' + assignee.id + '", ';
-                logger.info(currentUser);
-                logger.info(currentTopic);
-                logger.info(currentMemory);
+                // logger.info(currentUser);
+                // logger.info(currentTopic);
+                // logger.info(currentMemory);
                 bot.sendMessage({
                     to: channelID,
                     message: "Sure! What should the task be?"
