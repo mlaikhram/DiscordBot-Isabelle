@@ -160,6 +160,7 @@ bot.on('message', function (user, userID, channelID, message, evt) {
                 break;
                 
             case 'complete':
+            case 'finish':
                 updateStatus(channelID, evt, args, 2);
                 break;
             // Just add any case commands if you want to..
@@ -593,6 +594,13 @@ function list(channelID, evt, args) {
                     case 2:
                         completed++;
                         break;
+                }
+                if ((notStarted + inProgress + completed) % 10 == 0) {
+                    bot.sendMessage({
+                        to: channelID,
+                        message: taskList
+                    });
+                    taskList = "\n"
                 }
             }
             stmt.free();
